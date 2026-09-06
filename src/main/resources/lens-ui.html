@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>lc4j-lens</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0d1117; color: #c9d1d9; font: 13px -apple-system, sans-serif; }
+  #bar { display: flex; gap: 8px; padding: 10px 14px; border-bottom: 1px solid #30363d; align-items: center; flex-wrap: wrap; }
+  #bar input { flex: 1; min-width: 200px; background: #161b22; border: 1px solid #30363d; color: #c9d1d9; padding: 6px 10px; border-radius: 6px; }
+  #bar select { background: #161b22; border: 1px solid #30363d; color: #c9d1d9; padding: 6px 8px; border-radius: 6px; }
+  #bar button { background: #238636; color: white; border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer; }
+  #bar button.secondary { background: #21262d; border: 1px solid #30363d; }
+  #legend { display: flex; gap: 18px; padding: 8px 14px; border-bottom: 1px solid #30363d; color: #8b949e; font-size: 12px; flex-wrap: wrap; align-items: center; }
+  #legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  #gradientBar { width: 90px; height: 8px; border-radius: 4px; background: linear-gradient(to right, #30363d, #58a6ff, #f0883e); display: inline-block; }
+  #status { color: #8b949e; padding: 6px 14px; }
+  #errorBanner { display: none; background: #3b1f1f; border-bottom: 1px solid #f85149; color: #ffa198; padding: 10px 14px; font-size: 13px; }
+  #warningBanner { display: none; background: #3d2f0e; border-bottom: 1px solid #d29922; color: #e3b341; padding: 10px 14px; font-size: 13px; }
+  #main { display: flex; }
+  canvas { display: block; cursor: grab; }
+  canvas.grabbing { cursor: grabbing; }
+  #results { width: 380px; flex-shrink: 0; border-left: 1px solid #30363d; overflow-y: auto; }
+  #results .empty { padding: 14px; color: #6e7681; font-size: 12px; }
+  .result { padding: 10px 12px; border-bottom: 1px solid #21262d; }
+  .result .rank { color: #f0883e; font-weight: 600; margin-right: 6px; }
+  .result .score { color: #8b949e; float: right; font-variant-numeric: tabular-nums; }
+  .result .text { margin-top: 4px; color: #c9d1d9; line-height: 1.4; }
+  .compareCol h4 { margin: 10px 12px 4px; font-size: 12px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.03em; }
+  .compareCol .result.missingElsewhere { border-left: 3px solid #f0883e; }
+  .compareNote { padding: 8px 12px; color: #6e7681; font-size: 11px; border-top: 1px solid #21262d; }
+  #zoomHint { position: absolute; bottom: 10px; left: 10px; color: #6e7681; font-size: 11px; pointer-events: none; }
+  #tooltip { position: fixed; max-width: 320px; background: #161b22; border: 1px solid #30363d;
+             border-radius: 6px; padding: 8px 10px; font-size: 12px; pointer-events: none; display: none; }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <strong>lc4j-lens</strong>
+    <input id="q" placeholder="Type a query to see which chunks it would retrieve..." />
+    <select id="modelSelect"></select>
+    <button id="go">Query</button>
+    <button id="compare" class="secondary" title="Run this query through every registered embedding model and compare results side by side">Compare models</button>
+    <button id="reset" class="secondary" title="Reset zoom/pan">Reset view</button>
+  </div>
+  <div id="errorBanner"></div>
+  <div id="warningBanner"></div>
+  <div id="legend"></div>
+  <div id="status">Loading embeddings...</div>
+  <div id="main" style="position: relative;">
+    <canvas id="c"></canvas>
+    <div id="zoomHint">Scroll to zoom, drag to pan</div>
+    <div id="results"><div class="empty">Run a query to see ranked matches with their similarity score and text here.</div></div>
+  </div>
+  <div id="tooltip"></div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const tooltip = document.getElementById('tooltip');
+const statusEl = document.getElementById('status');
+const resultsEl = document.getElementById('results');
+const legendEl = document.getElementById('legend');
+const errorBanner = document.getElementById('errorBanner');
+const warningBanner = document.getElementById('warningBanner');
+const modelSelect = document.getElementById('modelSelect');
+
+const CLUSTER_COLORS = ['#58a6ff', '#3fb950', '#d2a8ff', '#ffa657', '#79c0ff', '#f778ba', '#7ee787', '#ff7b72'];
+
+let points = [];
+let highlighted = new Set();
+let queryPoint = null;
+let bounds = null;
+let mode = 'cluster'; // 'cluster' before any query, 'query' after
+let modelNames = [];
+
+// Pan/zoom state, applied on top of the fit-to-window base mapping.
+let view = { scale: 1, offsetX: 0, offsetY: 0 };
+let dragging = false, dragStart = null;
+
+function resize() {
+  canvas.width = window.innerWidth - resultsEl.offsetWidth;
+  canvas.height = window.innerHeight - 140;
+  draw();
+}
+window.addEventListener('resize', resize);
+
+function computeBounds(pts) {
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+}
+
+function baseScreen(p) {
+  const pad = 40;
+  const w = canvas.width - pad * 2, h = canvas.height - pad * 2;
+  const sx = pad + ((p.x - bounds.minX) / (bounds.maxX - bounds.minX || 1)) * w;
+  const sy = pad + (1 - (p.y - bounds.minY) / (bounds.maxY - bounds.minY || 1)) * h;
+  return [sx, sy];
+}
+
+function toScreen(p) {
+  const [bx, by] = baseScreen(p);
+  return [bx * view.scale + view.offsetX, by * view.scale + view.offsetY];
+}
+
+function screenToBase(sx, sy) {
+  return [(sx - view.offsetX) / view.scale, (sy - view.offsetY) / view.scale];
+}
+
+function colorFor(p) {
+  if (mode === 'query') {
+    const t = Math.max(0, Math.min(1, (p.score + 1) / 2)); // cosine in [-1,1] -> [0,1]
+    return lerpColor('#30363d', '#f0883e', t);
+  }
+  return CLUSTER_COLORS[p.cluster % CLUSTER_COLORS.length];
+}
+
+function lerpColor(a, b, t) {
+  const pa = hexToRgb(a), pb = hexToRgb(b);
+  const r = Math.round(pa[0] + (pb[0] - pa[0]) * t);
+  const g = Math.round(pa[1] + (pb[1] - pa[1]) * t);
+  const bch = Math.round(pa[2] + (pb[2] - pa[2]) * t);
+  return `rgb(${r},${g},${bch})`;
+}
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function draw() {
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (!bounds) return;
+
+  for (const p of points) {
+    const [sx, sy] = toScreen(p);
+    p._sx = sx; p._sy = sy;
+  }
+
+  if (queryPoint) {
+    const [qsx, qsy] = toScreen(queryPoint);
+    ctx.strokeStyle = '#f0883e';
+    ctx.globalAlpha = 0.5;
+    ctx.lineWidth = 1.5;
+    for (const p of points) {
+      if (!highlighted.has(p.id)) continue;
+      ctx.beginPath();
+      ctx.moveTo(qsx, qsy);
+      ctx.lineTo(p._sx, p._sy);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  for (const p of points) {
+    const isHit = highlighted.has(p.id);
+    const r = (isHit ? 6 : 3.5) * Math.min(1.6, Math.max(0.6, view.scale));
+    ctx.beginPath();
+    ctx.arc(p._sx, p._sy, r, 0, Math.PI * 2);
+    ctx.fillStyle = colorFor(p);
+    ctx.globalAlpha = (mode === 'cluster' || isHit) ? 0.9 : 0.85;
+    ctx.fill();
+    if (isHit) {
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#f0883e';
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  if (queryPoint) {
+    const [qsx, qsy] = toScreen(queryPoint);
+    ctx.beginPath();
+    ctx.arc(qsx, qsy, 8 * Math.min(1.6, Math.max(0.6, view.scale)), 0, Math.PI * 2);
+    ctx.fillStyle = '#f85149';
+    ctx.fill();
+    ctx.strokeStyle = '#0d1117';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+}
+
+function renderLegend() {
+  if (mode === 'query') {
+    legendEl.innerHTML = `
+      <span><i class="dot" style="background:#f85149"></i> query (what you typed, embedded with the selected model)</span>
+      <span><i class="dot" style="background:#f0883e"></i> retrieved top match</span>
+      <span><i id="gradientBar"></i> low &rarr; high cosine similarity to query (all points)</span>
+      <span>Position = t-SNE layout, re-fit around this query.</span>
+    `;
+  } else {
+    legendEl.innerHTML = `
+      <span>Colors = unsupervised clusters (k-means on the raw embeddings) — dots sharing a color are topically similar.</span>
+      <span>Position = t-SNE layout: nearby dots are semantically similar. Hover a dot for its text. Type a query above to see retrieval in action.</span>
+    `;
+  }
+}
+
+canvas.addEventListener('mousemove', (e) => {
+  if (dragging) {
+    const dx = e.clientX - dragStart.x, dy = e.clientY - dragStart.y;
+    view.offsetX = dragStart.offsetX + dx;
+    view.offsetY = dragStart.offsetY + dy;
+    draw();
+    return;
+  }
+  const hit = points.find(p => Math.hypot(p._sx - e.clientX, p._sy - e.clientY) < 8);
+  if (hit) {
+    tooltip.style.display = 'block';
+    tooltip.style.left = (e.clientX + 14) + 'px';
+    tooltip.style.top = (e.clientY + 14) + 'px';
+    tooltip.textContent = hit.text;
+  } else {
+    tooltip.style.display = 'none';
+  }
+});
+
+canvas.addEventListener('mousedown', (e) => {
+  dragging = true;
+  dragStart = { x: e.clientX, y: e.clientY, offsetX: view.offsetX, offsetY: view.offsetY };
+  canvas.classList.add('grabbing');
+});
+window.addEventListener('mouseup', () => { dragging = false; canvas.classList.remove('grabbing'); });
+
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const [bx, by] = screenToBase(mx, my);
+  const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+  view.scale = Math.max(0.2, Math.min(20, view.scale * factor));
+  view.offsetX = mx - bx * view.scale;
+  view.offsetY = my - by * view.scale;
+  draw();
+}, { passive: false });
+
+document.getElementById('reset').addEventListener('click', () => {
+  view = { scale: 1, offsetX: 0, offsetY: 0 };
+  draw();
+});
+
+function renderResults(matches) {
+  if (!matches || matches.length === 0) {
+    resultsEl.innerHTML = '<div class="empty">No matches returned.</div>';
+    return;
+  }
+  resultsEl.innerHTML = matches.map((m, i) => `
+    <div class="result">
+      <span class="rank">#${i + 1}</span>
+      <span class="score">${(m.score * 100).toFixed(1)}% similar</span>
+      <div class="text">${escapeHtml(m.text)}</div>
+    </div>
+  `).join('');
+}
+
+function renderComparison(text, resultsByModel) {
+  const cols = modelNames.map(name => {
+    const matches = resultsByModel[name] || [];
+    const otherIds = new Set(
+      modelNames.filter(n => n !== name).flatMap(n => (resultsByModel[n] || []).map(m => m.id))
+    );
+    const rows = matches.map((m, i) => {
+      const missing = !otherIds.has(m.id);
+      return `
+        <div class="result${missing ? ' missingElsewhere' : ''}">
+          <span class="rank">#${i + 1}</span>
+          <span class="score">${(m.score * 100).toFixed(1)}%</span>
+          <div class="text">${escapeHtml(m.text)}</div>
+        </div>`;
+    }).join('');
+    return `<div class="compareCol"><h4>${escapeHtml(name)}</h4>${rows || '<div class="empty">No matches.</div>'}</div>`;
+  }).join('');
+  resultsEl.innerHTML = cols +
+    '<div class="compareNote">Orange left border = this chunk did not appear in the other model(s) top matches for the same query text — that divergence is the cost of embedding your query with a different model than the one that built the store.</div>';
+}
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+function showError(msg) {
+  errorBanner.textContent = msg;
+  errorBanner.style.display = msg ? 'block' : 'none';
+}
+
+function showWarning(msg) {
+  warningBanner.textContent = msg;
+  warningBanner.style.display = msg ? 'block' : 'none';
+}
+
+const MODEL_MISMATCH_WARNING =
+  'This query was embedded with a DIFFERENT model than the one used to build the store. ' +
+  'Same output dimensions do NOT mean compatible vector spaces — two models trained separately place ' +
+  'the same sentence in unrelated coordinates. The similarity scores and ranking below are close to ' +
+  'meaningless noise, not a real answer to "what matches this query." This view exists to demonstrate ' +
+  'that failure mode, not to recommend cross-model querying.';
+
+async function loadModels() {
+  const res = await fetch('/api/models');
+  modelNames = await res.json();
+  modelSelect.innerHTML = modelNames.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+  document.getElementById('compare').style.display = modelNames.length > 1 ? 'inline-block' : 'none';
+}
+
+async function loadPoints() {
+  const res = await fetch('/api/points');
+  points = await res.json();
+  bounds = computeBounds(points);
+  mode = 'cluster';
+  renderLegend();
+  const clusterCount = new Set(points.map(p => p.cluster)).size;
+  statusEl.textContent = points.length + ' embeddings plotted (t-SNE), ' + clusterCount + ' clusters found — type a query above to see retrieval in action.';
+  resize();
+}
+
+async function apiQuery(text, model) {
+  const res = await fetch('/api/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, model })
+  });
+  return res.json();
+}
+
+async function runQuery() {
+  const text = document.getElementById('q').value.trim();
+  if (!text) return;
+  showError(null);
+  showWarning(null);
+  statusEl.textContent = 'Querying with "' + modelSelect.value + '"...';
+  const data = await apiQuery(text, modelSelect.value);
+  if (data.error) {
+    showError(data.error);
+    statusEl.textContent = 'Query failed — see message above.';
+    return;
+  }
+  if (!data.matchesStoreModel) {
+    showWarning(MODEL_MISMATCH_WARNING);
+  }
+  // t-SNE has no out-of-sample extension: every query re-fits the WHOLE layout
+  // (all points + the query vector together), so the server sends back fresh
+  // coordinates (and per-point similarity scores) for everything, not just the query.
+  points = data.points;
+  highlighted = new Set(data.nearestIds);
+  queryPoint = data.queryPoint;
+  mode = 'query';
+  bounds = computeBounds([...points, queryPoint]);
+  view = { scale: 1, offsetX: 0, offsetY: 0 };
+  renderLegend();
+  statusEl.textContent = 'Query: "' + text + '" via ' + data.modelUsed + ' — red dot is your query, top ' + data.nearestIds.length + ' matches ranked in the panel.';
+  renderResults(data.matches);
+  draw();
+}
+
+async function compareModels() {
+  const text = document.getElementById('q').value.trim();
+  if (!text) return;
+  showError(null);
+  showWarning(modelNames.length > 1 ? MODEL_MISMATCH_WARNING : null);
+  statusEl.textContent = 'Comparing ' + modelNames.length + ' embedding models for: "' + text + '"...';
+  const resultsByModel = {};
+  let lastGood = null;
+  for (const name of modelNames) {
+    const data = await apiQuery(text, name);
+    if (data.error) {
+      resultsByModel[name] = [];
+      continue;
+    }
+    resultsByModel[name] = data.matches;
+    lastGood = data; // scatter plot reflects whichever model was queried last
+  }
+  if (lastGood) {
+    points = lastGood.points;
+    highlighted = new Set(lastGood.nearestIds);
+    queryPoint = lastGood.queryPoint;
+    mode = 'query';
+    bounds = computeBounds([...points, queryPoint]);
+    renderLegend();
+    draw();
+  }
+  statusEl.textContent = 'Compared ' + modelNames.length + ' models for: "' + text + '" — scatter reflects "' + (lastGood ? lastGood.modelUsed : '?') + '".';
+  renderComparison(text, resultsByModel);
+}
+
+document.getElementById('go').addEventListener('click', runQuery);
+document.getElementById('compare').addEventListener('click', compareModels);
+document.getElementById('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') runQuery(); });
+
+loadModels();
+loadPoints();
+</script>
+</body>
+</html>
