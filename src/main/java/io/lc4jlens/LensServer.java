@@ -1,12 +1,14 @@
 package io.lc4jlens;
 
 import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -42,11 +44,13 @@ public final class LensServer {
         this.queryModels = new LinkedHashMap<>(queryModels);
         this.topK = topK;
         this.clusterIds = clusterIds;
-        this.server = HttpServer.create(new InetSocketAddress(port), 0);
-        server.createContext("/", this::serveIndex);
-        server.createContext("/api/points", this::servePoints);
-        server.createContext("/api/models", this::serveModels);
-        server.createContext("/api/query", this::serveQuery);
+        // Bind to loopback only: an InetSocketAddress(port) with no host binds the wildcard
+        // address (0.0.0.0), which would expose embedding content to anyone on the same network.
+        this.server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 0);
+        server.createContext("/", guarded(this::serveIndex));
+        server.createContext("/api/points", guarded(this::servePoints));
+        server.createContext("/api/models", guarded(this::serveModels));
+        server.createContext("/api/query", guarded(this::serveQuery));
         server.setExecutor(null);
     }
 
@@ -218,5 +222,25 @@ public final class LensServer {
         try (OutputStream os = ex.getResponseBody()) {
             os.write(body);
         }
+    }
+
+    // Without this, an unexpected exception (e.g. the embedding model failing to load, or
+    // an OOM on a huge store) propagates out of the JDK HttpServer's dispatch and the
+    // connection is simply dropped — the browser shows a bare "connection reset" with no
+    // explanation. Wrapping every handler turns that into a clean JSON error response.
+    private static HttpHandler guarded(HttpHandler handler) {
+        return ex -> {
+            try {
+                handler.handle(ex);
+            } catch (Exception e) {
+                try {
+                    String message = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+                    respond(ex, 500, "application/json; charset=utf-8",
+                        ("{\"error\":\"" + Json.escape(message) + "\"}").getBytes(StandardCharsets.UTF_8));
+                } catch (IOException alreadyBroken) {
+                    // connection is gone; nothing more we can do
+                }
+            }
+        };
     }
 }

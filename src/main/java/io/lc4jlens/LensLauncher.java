@@ -7,6 +7,7 @@ import dev.langchain4j.store.embedding.EmbeddingMatch;
 import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
+import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -84,21 +85,34 @@ public final class LensLauncher {
         }
     }
 
-    // ponytail: EmbeddingStore has no universal "list everything" method, so we
-    // approximate a full dump by searching nearest-to-a-neutral-probe with a large
-    // maxResults. For stores holding more than maxPoints entries this is a sample,
-    // not the full set — fine for a local debug view, revisit if a store-specific
-    // export (e.g. InMemoryEmbeddingStore#serializeToJson) is worth wiring in.
+    // EmbeddingStore has no universal "list everything" method, so the generic path
+    // approximates a full dump via nearest-neighbor search against a neutral probe with a
+    // large maxResults. But InMemoryEmbeddingStore exposes a public, stable size() we can
+    // use to size that request exactly, turning the "approximation" into an exact full
+    // listing for that store (by far the most common one for quick starts and demos) without
+    // depending on its internal serialization format. Other store types still get the
+    // maxPoints-capped approximation; see the ponytail note below and the corresponding
+    // good-first-issue for wiring in more store-specific exact paths.
     private static List<EmbeddingMatch<TextSegment>> fetchMatches(EmbeddingStore<TextSegment> store,
                                                                     EmbeddingModel embeddingModel,
                                                                     int maxPoints) {
+        int effectiveMaxResults = maxPoints;
+        if (store instanceof InMemoryEmbeddingStore<TextSegment> inMemory) {
+            effectiveMaxResults = Math.max(maxPoints, inMemory.size());
+        }
+
         Embedding probe = embeddingModel.embed("lc4j-lens probe query").content();
         EmbeddingSearchRequest request = EmbeddingSearchRequest.builder()
             .queryEmbedding(probe)
-            .maxResults(maxPoints)
+            .maxResults(effectiveMaxResults)
             .minScore(0.0)
             .build();
         EmbeddingSearchResult<TextSegment> result = store.search(request);
         return result.matches();
     }
+
+    // ponytail: for store types other than InMemoryEmbeddingStore, this remains a
+    // maxPoints-capped nearest-neighbor approximation, not a guaranteed full listing.
+    // Upgrade path: add more instanceof branches above for other stores that expose an
+    // exact count or listing (see CONTRIBUTING.md).
 }

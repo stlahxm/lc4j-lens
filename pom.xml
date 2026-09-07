@@ -39,7 +39,18 @@
       <version>0.0.1</version>
     </dependency>
 
-    <!-- Demo/self-check only: local, no-API-key embedding models + InMemoryEmbeddingStore -->
+    <!--
+      Provides InMemoryEmbeddingStore, which LensLauncher checks for via instanceof
+      to request an exact full listing (via its public size()) instead of the generic
+      maxPoints-capped approximation used for other store types.
+    -->
+    <dependency>
+      <groupId>dev.langchain4j</groupId>
+      <artifactId>langchain4j</artifactId>
+      <version>${langchain4j.version}</version>
+    </dependency>
+
+    <!-- Demo/self-check only: local, no-API-key embedding models -->
     <dependency>
       <groupId>dev.langchain4j</groupId>
       <artifactId>langchain4j-embeddings-all-minilm-l6-v2-q</artifactId>
@@ -53,12 +64,6 @@
       <groupId>dev.langchain4j</groupId>
       <artifactId>langchain4j-embeddings-bge-small-en-v15-q</artifactId>
       <version>1.18.0-beta28</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>dev.langchain4j</groupId>
-      <artifactId>langchain4j</artifactId>
-      <version>${langchain4j.version}</version>
       <scope>test</scope>
     </dependency>
 

@@ -78,10 +78,12 @@ other entry triggers the mismatch warning in the UI.
 
 ## Limitations
 
-- `EmbeddingStore` has no universal "list everything" method, so lc4j-lens
+- `EmbeddingStore` has no universal "list everything" method. For
+  `InMemoryEmbeddingStore`, lc4j-lens uses its public `size()` to request
+  every entry exactly (no sampling). For any other store type, it
   approximates a full dump via a nearest-neighbor search with a large
-  `maxResults` against a neutral probe embedding. For stores much larger
-  than `maxPoints` (default 5,000) this is a sample, not the full set.
+  `maxResults` against a neutral probe embedding; for stores much larger
+  than `maxPoints` (default 5,000) that's a sample, not the full set.
 - Re-fitting t-SNE on every query is roughly O(n log n); fine up to a few
   thousand points, but not built for very large stores.
 - The model-mismatch check compares model *names*, not the actual vector

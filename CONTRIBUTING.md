@@ -13,13 +13,13 @@ These are real, unclaimed gaps — not busywork:
   `VectorStore` would open this up to the other half of the Java RAG
   ecosystem. Spring AI's `VectorStore` has a `similaritySearch(SearchRequest)`
   method that plays the same role as `EmbeddingStore#search`.
-- **Native "list everything" support for stores that offer it.** Right now
-  `LensLauncher.fetchMatches` approximates a full dump via a nearest-neighbor
-  search against a probe vector (see the `ponytail:` comment in
-  `LensLauncher.java`). Some stores (e.g. `InMemoryEmbeddingStore`, via
-  `serializeToJson()`) can enumerate their contents exactly — wiring in a
-  store-specific export path where available would remove the sampling
-  caveat for those stores.
+- **Native "exact count/listing" support for more store types.**
+  `LensLauncher.fetchMatches` already special-cases `InMemoryEmbeddingStore`
+  (using its public `size()` to request every entry exactly, no sampling).
+  Other stores (e.g. `PgVectorEmbeddingStore`) may expose a way to get an
+  exact count or full listing too — adding an `instanceof` branch per store
+  type (see the `ponytail:` comment in `LensLauncher.java`) would remove the
+  approximation for those as well.
 - **Additional local embedding models in the demo.** `Demo.java` currently
   registers AllMiniLM and BGE-small. Adding e.g. E5-small as a third option
   would strengthen the model-comparison feature without much code.
