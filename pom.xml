@@ -67,6 +67,14 @@
       <scope>test</scope>
     </dependency>
 
+    <!-- Third local model used by the demo -->
+    <dependency>
+      <groupId>dev.langchain4j</groupId>
+      <artifactId>langchain4j-embeddings-e5-small-v2-q</artifactId>
+      <version>1.18.0-beta28</version>
+      <scope>test</scope>
+    </dependency>
+
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>

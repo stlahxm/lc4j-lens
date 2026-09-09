@@ -5,6 +5,7 @@ import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.embedding.onnx.allminilml6v2q.AllMiniLmL6V2QuantizedEmbeddingModel;
 import dev.langchain4j.model.embedding.onnx.bgesmallenv15q.BgeSmallEnV15QuantizedEmbeddingModel;
+import dev.langchain4j.model.embedding.onnx.e5smallv2q.E5SmallV2QuantizedEmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore;
 
@@ -58,6 +59,7 @@ public class Demo {
         Map<String, EmbeddingModel> queryModels = new LinkedHashMap<>();
         queryModels.put("AllMiniLM (same model used to build the store)", embeddingModel);
         queryModels.put("BGE-small (different model, same dimensions)", new BgeSmallEnV15QuantizedEmbeddingModel());
+        queryModels.put("E5-small (different model, same dimensions)", new E5SmallV2QuantizedEmbeddingModel());
 
         LensServer server = LensLauncher.launch(store, embeddingModel, queryModels, 7477, 100);
         System.out.println("Open http://localhost:" + server.port() + " in your browser.");
