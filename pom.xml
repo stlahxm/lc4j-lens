@@ -17,6 +17,7 @@
     <maven.compiler.target>17</maven.compiler.target>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <langchain4j.version>1.18.1</langchain4j.version>
+    <spring-ai.version>1.1.8</spring-ai.version>
   </properties>
 
   <dependencies>
@@ -24,6 +25,20 @@
       <groupId>dev.langchain4j</groupId>
       <artifactId>langchain4j-core</artifactId>
       <version>${langchain4j.version}</version>
+    </dependency>
+
+    <dependency>
+     <groupId>org.springframework.ai</groupId>
+     <artifactId>spring-ai-vector-store</artifactId>
+     <version>${spring-ai.version}</version>
+    </dependency>
+
+    <!-- Demo/self-check only: local, no-API-key embedding model for the Spring AI adapter -->
+    <dependency>
+     <groupId>org.springframework.ai</groupId>
+     <artifactId>spring-ai-transformers</artifactId>
+     <version>${spring-ai.version}</version>
+     <scope>test</scope>
     </dependency>
 
     <!--
